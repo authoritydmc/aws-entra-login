@@ -4,6 +4,7 @@ import { getSSOAccessToken } from "./auth/sso-flow.js";
 import { listSSOAccounts, listSSORoles, getSSORoleCredentials } from "./aws/sso.js";
 import { promptSelectSSOAccount, promptSelectSSORole } from "./ui/sso-selector.js";
 import { writeAwsCredentialsFile } from "./aws/credentials.js";
+import { assumeChainedRole } from "./aws/sts.js";
 import picocolors from "picocolors";
 
 /**
@@ -42,23 +43,38 @@ export async function ssoLogin(options: LoginOptions = {}): Promise<AWSCredentia
 
   // 2. Discover Accounts
   const accounts = await listSSOAccounts(ssoRegion, accessToken);
-  const targetAccountId = options.ssoAccountId || savedProfile?.ssoAccountId;
+  const targetAccountId = options.switchRole ? undefined : (options.ssoAccountId || savedProfile?.ssoAccountId);
   const selectedAccount = await promptSelectSSOAccount(accounts, targetAccountId);
 
   // 3. Discover Roles in Account
   const roles = await listSSORoles(ssoRegion, accessToken, selectedAccount.accountId);
-  const targetRoleName = options.ssoRoleName || savedProfile?.ssoRoleName;
+  const targetRoleName = options.switchRole ? undefined : (options.ssoRoleName || savedProfile?.ssoRoleName);
   const selectedRole = await promptSelectSSORole(roles, targetRoleName);
 
   // 4. Retrieve temporary STS Credentials
-  const credentials = await getSSORoleCredentials({
+  let credentials = await getSSORoleCredentials({
     ssoRegion,
     accessToken,
     accountId: selectedAccount.accountId,
     roleName: selectedRole.roleName,
   });
 
-  // 5. Write to ~/.aws/credentials if requested
+  // 5. Cross-Account Role Chaining (if targetRoleArn configured)
+  const targetRoleArn = options.targetRoleArn || savedProfile?.targetRoleArn;
+  if (targetRoleArn) {
+    if (!options.quiet) {
+      console.log(`\n${picocolors.cyan("⛓ Chaining role assumption to:")} ${picocolors.bold(targetRoleArn)}`);
+    }
+    credentials = await assumeChainedRole({
+      baseCredentials: credentials,
+      targetRoleArn,
+      roleSessionName: options.roleSessionName || savedProfile?.roleSessionName,
+      externalId: options.externalId || savedProfile?.externalId,
+      region: options.region || savedProfile?.region,
+    });
+  }
+
+  // 6. Write to ~/.aws/credentials if requested
   if (options.writeCredentials !== false) {
     const awsProfileName = savedProfile?.awsProfile || profileName;
     const credPath = writeAwsCredentialsFile(awsProfileName, credentials);
@@ -67,18 +83,24 @@ export async function ssoLogin(options: LoginOptions = {}): Promise<AWSCredentia
       console.log(`\n${picocolors.bold(picocolors.green("✔ Successfully Authenticated with AWS SSO!"))}`);
       console.log(`  ${picocolors.cyan("Account:")}     ${picocolors.bold(selectedAccount.accountName)} (${selectedAccount.accountId})`);
       console.log(`  ${picocolors.cyan("Role:")}        ${picocolors.bold(selectedRole.roleName)}`);
+      if (targetRoleArn) {
+        console.log(`  ${picocolors.cyan("Target Role:")} ${picocolors.bold(targetRoleArn)}`);
+      }
       console.log(`  ${picocolors.cyan("Expires:")}     ${credentials.expiration.toLocaleTimeString()} (${credentials.expiration.toLocaleDateString()})`);
       console.log(`  ${picocolors.cyan("Credentials:")} Saved to ${picocolors.bold(credPath)} [${awsProfileName}]\n`);
     }
   }
 
-  // 6. Persist selected account & role to saved profile
+  // 7. Persist selected account & role to saved profile
   if (savedProfile) {
     savedProfile.type = "sso";
     savedProfile.ssoStartUrl = startUrl;
     savedProfile.ssoRegion = ssoRegion;
     savedProfile.ssoAccountId = selectedAccount.accountId;
     savedProfile.ssoRoleName = selectedRole.roleName;
+    if (options.targetRoleArn) {
+      savedProfile.targetRoleArn = options.targetRoleArn;
+    }
     saveProfile(savedProfile);
   }
 

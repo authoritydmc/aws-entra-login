@@ -1,6 +1,6 @@
 {
   "name": "aws-entra-login",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Modern, zero-fragility Microsoft Entra ID (Azure AD) and AWS SSO (IAM Identity Center) authentication CLI tool supporting Authenticator number matching, Device Code flow, and AWS credential_process.",
   "keywords": [
     "aws",

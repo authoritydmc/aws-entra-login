@@ -3,7 +3,7 @@ import { getProfile, saveProfile } from "./config/profile-store.js";
 import { requestDeviceCode, displayDeviceCodePrompt, pollDeviceToken } from "./auth/device-flow.js";
 import { parseSAMLAssertionRoles, parseSAMLSessionDuration } from "./auth/saml-parser.js";
 import { promptSelectRole } from "./ui/role-selector.js";
-import { assumeRoleWithSAML } from "./aws/sts.js";
+import { assumeRoleWithSAML, assumeChainedRole } from "./aws/sts.js";
 import { writeAwsCredentialsFile } from "./aws/credentials.js";
 import { ssoLogin } from "./sso-login.js";
 import picocolors from "picocolors";
@@ -55,10 +55,12 @@ export async function login(options: LoginOptions = {}): Promise<AWSCredentials>
   const roles = parseSAMLAssertionRoles(samlAssertion);
   let selectedRole;
 
+  const preselectedRole = options.switchRole ? undefined : (options.roleArn || savedProfile?.defaultRoleArn);
+
   if (roles.length > 0) {
     selectedRole = await promptSelectRole(
       roles,
-      options.roleArn || savedProfile?.defaultRoleArn
+      preselectedRole
     );
   } else if (options.roleArn && savedProfile?.principalArn) {
     selectedRole = {
@@ -76,7 +78,7 @@ export async function login(options: LoginOptions = {}): Promise<AWSCredentials>
   const durationSeconds = options.duration || savedProfile?.durationSeconds || samlDuration || 3600;
 
   // 6. Call AWS STS AssumeRoleWithSAML
-  const credentials = await assumeRoleWithSAML({
+  let credentials = await assumeRoleWithSAML({
     samlAssertionBase64: samlAssertion,
     roleArn: selectedRole.roleArn,
     principalArn: selectedRole.principalArn,
@@ -84,7 +86,23 @@ export async function login(options: LoginOptions = {}): Promise<AWSCredentials>
     region: options.region || savedProfile?.region,
   });
 
-  // 7. Write to ~/.aws/credentials if requested
+  // 7. Role Chaining / Cross-Account Assume Role (if targetRoleArn configured)
+  const targetRoleArn = options.targetRoleArn || savedProfile?.targetRoleArn;
+  if (targetRoleArn) {
+    if (!options.quiet) {
+      console.log(`\n${picocolors.cyan("⛓ Chaining role assumption to:")} ${picocolors.bold(targetRoleArn)}`);
+    }
+    credentials = await assumeChainedRole({
+      baseCredentials: credentials,
+      targetRoleArn,
+      roleSessionName: options.roleSessionName || savedProfile?.roleSessionName,
+      externalId: options.externalId || savedProfile?.externalId,
+      region: options.region || savedProfile?.region,
+      durationSeconds,
+    });
+  }
+
+  // 8. Write to ~/.aws/credentials if requested
   if (options.writeCredentials !== false) {
     const awsProfileName = savedProfile?.awsProfile || profileName;
     const credPath = writeAwsCredentialsFile(awsProfileName, credentials);
@@ -92,6 +110,9 @@ export async function login(options: LoginOptions = {}): Promise<AWSCredentials>
     if (!options.quiet) {
       console.log(`\n${picocolors.bold(picocolors.green("✔ Successfully Authenticated with AWS!"))}`);
       console.log(`  ${picocolors.cyan("Role:")}        ${picocolors.bold(selectedRole.roleName)} (${selectedRole.roleArn})`);
+      if (targetRoleArn) {
+        console.log(`  ${picocolors.cyan("Target Role:")} ${picocolors.bold(targetRoleArn)}`);
+      }
       console.log(`  ${picocolors.cyan("Account:")}     ${credentials.accountId}`);
       console.log(`  ${picocolors.cyan("Expires:")}     ${credentials.expiration.toLocaleTimeString()} (${credentials.expiration.toLocaleDateString()})`);
       console.log(`  ${picocolors.cyan("Credentials:")} Saved to ${picocolors.bold(credPath)} [${awsProfileName}]\n`);
@@ -103,6 +124,9 @@ export async function login(options: LoginOptions = {}): Promise<AWSCredentials>
     savedProfile.type = "entra";
     savedProfile.defaultRoleArn = selectedRole.roleArn;
     savedProfile.principalArn = selectedRole.principalArn;
+    if (options.targetRoleArn) {
+      savedProfile.targetRoleArn = options.targetRoleArn;
+    }
     saveProfile(savedProfile);
   }
 

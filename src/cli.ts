@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { text, intro, outro } from "@clack/prompts";
 import { login } from "./login.js";
 import { ssoLogin } from "./sso-login.js";
+import { switchRole } from "./switch.js";
 import { saveProfile, listProfiles, getProfile } from "./config/profile-store.js";
 import { formatCredentialProcessJSON, formatShellEnv } from "./aws/credentials.js";
 import { getSSOAccessToken } from "./auth/sso-flow.js";
@@ -17,7 +18,7 @@ async function main() {
     .description(
       "Modern, zero-fragility Microsoft Entra ID (Azure AD) and AWS SSO (IAM Identity Center) authentication CLI tool."
     )
-    .version("1.1.0", "-v, --version", "Output current version");
+    .version("1.2.0", "-v, --version", "Output current version");
 
   // Default Login Command
   program
@@ -25,9 +26,12 @@ async function main() {
     .description("Authenticate with Microsoft Entra ID or AWS SSO and assume AWS Role")
     .option("-p, --profile <name>", "Configuration profile name", "default")
     .option("--sso", "Force AWS IAM Identity Center (SSO) login flow")
+    .option("-s, --switch", "Prompt interactively to switch role/account")
     .option("-t, --tenant-id <id>", "Microsoft Entra ID Tenant ID")
     .option("-a, --app-id <id>", "Azure AD Application / Client ID")
     .option("-r, --role-arn <arn>", "Target AWS IAM Role ARN")
+    .option("--target-role-arn <arn>", "Cross-account IAM Role ARN to assume via role chaining")
+    .option("--external-id <id>", "External ID for cross-account assume role")
     .option("-d, --duration <seconds>", "Session duration in seconds (up to 43200)", (val) => parseInt(val, 10))
     .option("--sso-start-url <url>", "AWS SSO Start URL (e.g. https://my-org.awsapps.com/start)")
     .option("--sso-region <region>", "AWS SSO Region (e.g. us-east-1)")
@@ -40,9 +44,12 @@ async function main() {
         await login({
           profile: options.profile,
           sso: options.sso,
+          switchRole: options.switch,
           tenantId: options.tenantId,
           appId: options.appId,
           roleArn: options.roleArn,
+          targetRoleArn: options.targetRoleArn,
+          externalId: options.externalId,
           duration: options.duration,
           ssoStartUrl: options.ssoStartUrl,
           ssoRegion: options.ssoRegion,
@@ -50,6 +57,32 @@ async function main() {
           ssoRoleName: options.ssoRoleName,
           region: options.region,
           force: options.force,
+          writeCredentials: true,
+        });
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Switch Role Command
+  program
+    .command("switch")
+    .alias("switch-role")
+    .description("Interactively switch active AWS account or IAM role")
+    .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("-r, --role-arn <arn>", "Direct target IAM Role ARN")
+    .option("--account-id <id>", "Target AWS Account ID (for SSO)")
+    .option("--role-name <name>", "Target Role Name (for SSO)")
+    .option("--target-role <arn>", "Cross-account destination IAM Role ARN")
+    .action(async (options) => {
+      try {
+        await switchRole({
+          profile: options.profile,
+          roleArn: options.roleArn,
+          ssoAccountId: options.accountId,
+          ssoRoleName: options.roleName,
+          targetRoleArn: options.targetRole,
           writeCredentials: true,
         });
       } catch (err: any) {
@@ -68,20 +101,45 @@ async function main() {
     .command("login", { isDefault: true })
     .description("Authenticate via AWS IAM Identity Center (SSO)")
     .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("-s, --switch", "Prompt interactively to switch role/account")
     .option("--start-url <url>", "AWS SSO Start URL")
     .option("--region <region>", "AWS SSO Region")
     .option("--account-id <id>", "AWS SSO Target Account ID")
     .option("--role-name <name>", "AWS SSO Target Role Name")
+    .option("--target-role <arn>", "Cross-account destination IAM Role ARN")
     .option("-f, --force", "Force re-authentication")
     .action(async (options) => {
       try {
         await ssoLogin({
           profile: options.profile,
+          switchRole: options.switch,
           ssoStartUrl: options.startUrl,
           ssoRegion: options.region,
           ssoAccountId: options.accountId,
           ssoRoleName: options.roleName,
+          targetRoleArn: options.targetRole,
           force: options.force,
+          writeCredentials: true,
+        });
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Subcommand: sso switch
+  ssoCmd
+    .command("switch")
+    .description("Interactively switch AWS SSO account or role")
+    .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("--account-id <id>", "Target AWS Account ID")
+    .option("--role-name <name>", "Target Role Name")
+    .action(async (options) => {
+      try {
+        await switchRole({
+          profile: options.profile,
+          ssoAccountId: options.accountId,
+          ssoRoleName: options.roleName,
           writeCredentials: true,
         });
       } catch (err: any) {
@@ -282,6 +340,9 @@ async function main() {
           if (p.defaultRoleArn) {
             console.log(`    Default Role: ${p.defaultRoleArn}`);
           }
+        }
+        if (p.targetRoleArn) {
+          console.log(`    Chained Role: ${p.targetRoleArn}`);
         }
         console.log(`    AWS Profile: ${p.awsProfile || p.name}`);
         console.log("");

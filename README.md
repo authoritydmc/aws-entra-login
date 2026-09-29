@@ -52,9 +52,30 @@ aws-entra-login sso login --profile my-sso
 ```
 *Opens browser authorization or displays QR code, lists accessible AWS accounts & roles, and stores credentials in `~/.aws/credentials`.*
 
-#### 3. List Accessible SSO Accounts
+#### 3. Switch Roles & Accounts on the Fly
+
+Quickly switch your active IAM role or AWS SSO account without re-authenticating:
+
 ```bash
-aws-entra-login sso accounts --profile my-sso
+# Interactive menu to select from all accessible accounts & roles
+aws-entra-login switch --profile prod
+
+# Or switch directly to a specific role / account
+aws-entra-login switch --profile prod --role-name AdministratorAccess --account-id 123456789012
+```
+
+---
+
+### 4. Cross-Account Role Chaining (Assume Target Role)
+
+Authenticate your base identity via Entra ID or AWS SSO, then automatically assume a target destination IAM role across accounts:
+
+```bash
+# Direct command line chaining
+aws-entra-login login --profile prod --target-role-arn arn:aws:iam::222233334444:role/CrossAccountDeployer
+
+# Or with switch command
+aws-entra-login switch --profile prod --target-role arn:aws:iam::222233334444:role/CrossAccountDeployer
 ```
 
 ---

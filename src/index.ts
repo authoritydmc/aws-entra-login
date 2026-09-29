@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./login.js";
 export * from "./sso-login.js";
+export * from "./switch.js";
 export * from "./auth/device-flow.js";
 export * from "./auth/sso-flow.js";
 export * from "./auth/saml-parser.js";

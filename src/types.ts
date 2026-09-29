@@ -14,6 +14,10 @@ export interface EntraProfile {
   ssoRegion?: string;   // e.g. us-east-1
   ssoAccountId?: string;// target AWS Account ID
   ssoRoleName?: string; // target SSO Role Name (e.g. AdministratorAccess)
+  // Role Chaining / Cross-Account Assume Role
+  targetRoleArn?: string; // Secondary target IAM Role ARN to assume via sts:AssumeRole
+  externalId?: string;
+  roleSessionName?: string;
   // Common fields
   region?: string;
   awsProfile?: string;  // name in ~/.aws/credentials
@@ -65,6 +69,11 @@ export interface LoginOptions {
   ssoRegion?: string;
   ssoAccountId?: string;
   ssoRoleName?: string;
+  // Role Switching & Chaining
+  switchRole?: boolean;    // Prompt interactively to switch role even if default is saved
+  targetRoleArn?: string; // Chain assume role to another account
+  externalId?: string;
+  roleSessionName?: string;
   // Common options
   region?: string;
   writeCredentials?: boolean;
