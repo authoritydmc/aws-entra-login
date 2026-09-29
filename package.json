@@ -1,7 +1,7 @@
 {
   "name": "aws-entra-login",
-  "version": "1.0.0",
-  "description": "Modern, zero-fragility Microsoft Entra ID (Azure AD) to AWS authentication CLI tool supporting Authenticator number matching, Device Code flow, and AWS credential_process.",
+  "version": "1.1.0",
+  "description": "Modern, zero-fragility Microsoft Entra ID (Azure AD) and AWS SSO (IAM Identity Center) authentication CLI tool supporting Authenticator number matching, Device Code flow, and AWS credential_process.",
   "keywords": [
     "aws",
     "azure-ad",
@@ -48,7 +48,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "tsx --test src/test/aws-entra-login.test.ts",
+    "test": "tsx --test src/test/*.test.ts",
     "lint": "eslint src/ --ext .ts",
     "prepublishOnly": "npm run build && npm test",
     "release:patch": "npm version patch && git push origin main --follow-tags",
@@ -56,6 +56,8 @@
     "release:major": "npm version major && git push origin main --follow-tags"
   },
   "dependencies": {
+    "@aws-sdk/client-sso": "^3.1143.0",
+    "@aws-sdk/client-sso-oidc": "^3.1143.0",
     "@aws-sdk/client-sts": "^3.658.0",
     "@clack/prompts": "^0.7.0",
     "commander": "^12.1.0",

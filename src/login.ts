@@ -5,21 +5,30 @@ import { parseSAMLAssertionRoles, parseSAMLSessionDuration } from "./auth/saml-p
 import { promptSelectRole } from "./ui/role-selector.js";
 import { assumeRoleWithSAML } from "./aws/sts.js";
 import { writeAwsCredentialsFile } from "./aws/credentials.js";
+import { ssoLogin } from "./sso-login.js";
 import picocolors from "picocolors";
 
 /**
- * Perform full Microsoft Entra ID (Azure AD) to AWS authentication flow.
+ * Universal login function supporting Microsoft Entra ID (Azure AD) and AWS SSO (IAM Identity Center).
  */
 export async function login(options: LoginOptions = {}): Promise<AWSCredentials> {
   const profileName = options.profile || "default";
   const savedProfile = getProfile(profileName);
 
+  // If explicitly requested SSO, or profile is configured as SSO
+  if (options.sso || options.ssoStartUrl || savedProfile?.type === "sso" || savedProfile?.ssoStartUrl) {
+    return ssoLogin(options);
+  }
+
   const tenantId = options.tenantId || savedProfile?.tenantId || process.env.AZURE_TENANT_ID;
   const appId = options.appId || savedProfile?.appId || process.env.AZURE_APP_ID;
 
   if (!tenantId || !appId) {
+    // If neither Entra nor SSO is configured, give helpful guide
     throw new Error(
-      `Missing tenantId or appId. Please run 'aws-entra-login configure --profile ${profileName}' or pass --tenant-id and --app-id flags.`
+      `Profile '${profileName}' is not configured. Run:\n` +
+      `  • 'aws-entra-login configure --profile ${profileName}' (for Microsoft Entra ID)\n` +
+      `  • 'aws-entra-login sso configure --profile ${profileName}' (for AWS IAM Identity Center / AWS SSO)`
     );
   }
 
@@ -91,6 +100,7 @@ export async function login(options: LoginOptions = {}): Promise<AWSCredentials>
 
   // Update saved profile with chosen role
   if (savedProfile) {
+    savedProfile.type = "entra";
     savedProfile.defaultRoleArn = selectedRole.roleArn;
     savedProfile.principalArn = selectedRole.principalArn;
     saveProfile(savedProfile);

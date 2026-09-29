@@ -1,8 +1,11 @@
 import { Command } from "commander";
 import { text, intro, outro } from "@clack/prompts";
 import { login } from "./login.js";
+import { ssoLogin } from "./sso-login.js";
 import { saveProfile, listProfiles, getProfile } from "./config/profile-store.js";
 import { formatCredentialProcessJSON, formatShellEnv } from "./aws/credentials.js";
+import { getSSOAccessToken } from "./auth/sso-flow.js";
+import { listSSOAccounts } from "./aws/sso.js";
 import { spawn } from "child_process";
 import picocolors from "picocolors";
 
@@ -12,29 +15,41 @@ async function main() {
   program
     .name("aws-entra-login")
     .description(
-      "Modern, zero-fragility Microsoft Entra ID (Azure AD) to AWS authentication CLI tool."
+      "Modern, zero-fragility Microsoft Entra ID (Azure AD) and AWS SSO (IAM Identity Center) authentication CLI tool."
     )
-    .version("1.0.0", "-v, --version", "Output current version");
+    .version("1.1.0", "-v, --version", "Output current version");
 
   // Default Login Command
   program
     .command("login", { isDefault: true })
-    .description("Authenticate with Microsoft Entra ID and assume AWS IAM Role")
+    .description("Authenticate with Microsoft Entra ID or AWS SSO and assume AWS Role")
     .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("--sso", "Force AWS IAM Identity Center (SSO) login flow")
     .option("-t, --tenant-id <id>", "Microsoft Entra ID Tenant ID")
     .option("-a, --app-id <id>", "Azure AD Application / Client ID")
     .option("-r, --role-arn <arn>", "Target AWS IAM Role ARN")
     .option("-d, --duration <seconds>", "Session duration in seconds (up to 43200)", (val) => parseInt(val, 10))
+    .option("--sso-start-url <url>", "AWS SSO Start URL (e.g. https://my-org.awsapps.com/start)")
+    .option("--sso-region <region>", "AWS SSO Region (e.g. us-east-1)")
+    .option("--sso-account-id <id>", "AWS SSO Target Account ID")
+    .option("--sso-role-name <name>", "AWS SSO Target Role Name")
     .option("--region <region>", "AWS Region")
+    .option("-f, --force", "Force re-authentication without using cached tokens")
     .action(async (options) => {
       try {
         await login({
           profile: options.profile,
+          sso: options.sso,
           tenantId: options.tenantId,
           appId: options.appId,
           roleArn: options.roleArn,
           duration: options.duration,
+          ssoStartUrl: options.ssoStartUrl,
+          ssoRegion: options.ssoRegion,
+          ssoAccountId: options.ssoAccountId,
+          ssoRoleName: options.ssoRoleName,
           region: options.region,
+          force: options.force,
           writeCredentials: true,
         });
       } catch (err: any) {
@@ -43,13 +58,159 @@ async function main() {
       }
     });
 
-  // Configure Profile Command
+  // Dedicated AWS SSO Command Group
+  const ssoCmd = program
+    .command("sso")
+    .description("AWS IAM Identity Center (AWS SSO) authentication commands");
+
+  // Subcommand: sso login
+  ssoCmd
+    .command("login", { isDefault: true })
+    .description("Authenticate via AWS IAM Identity Center (SSO)")
+    .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("--start-url <url>", "AWS SSO Start URL")
+    .option("--region <region>", "AWS SSO Region")
+    .option("--account-id <id>", "AWS SSO Target Account ID")
+    .option("--role-name <name>", "AWS SSO Target Role Name")
+    .option("-f, --force", "Force re-authentication")
+    .action(async (options) => {
+      try {
+        await ssoLogin({
+          profile: options.profile,
+          ssoStartUrl: options.startUrl,
+          ssoRegion: options.region,
+          ssoAccountId: options.accountId,
+          ssoRoleName: options.roleName,
+          force: options.force,
+          writeCredentials: true,
+        });
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Subcommand: sso configure
+  ssoCmd
+    .command("configure")
+    .description("Interactively configure an AWS IAM Identity Center (SSO) profile")
+    .option("-p, --profile <name>", "Profile name to configure", "default")
+    .action(async (options) => {
+      try {
+        intro(picocolors.bold(picocolors.cyan("Configure AWS IAM Identity Center (SSO) Profile")));
+
+        const existing = getProfile(options.profile);
+
+        const startUrl = await text({
+          message: "AWS SSO Start URL (e.g. https://my-sso.awsapps.com/start):",
+          defaultValue: existing?.ssoStartUrl || "",
+          placeholder: "https://my-org.awsapps.com/start",
+          validate: (v) => (!v.trim() ? "SSO Start URL is required" : undefined),
+        });
+
+        const ssoRegion = await text({
+          message: "AWS SSO Region:",
+          defaultValue: existing?.ssoRegion || "us-east-1",
+        });
+
+        const awsProfile = await text({
+          message: "Destination AWS Profile in ~/.aws/credentials:",
+          defaultValue: existing?.awsProfile || options.profile,
+        });
+
+        const region = await text({
+          message: "Default AWS Region for CLI:",
+          defaultValue: existing?.region || String(ssoRegion).trim(),
+        });
+
+        saveProfile({
+          name: options.profile,
+          type: "sso",
+          ssoStartUrl: String(startUrl).trim(),
+          ssoRegion: String(ssoRegion).trim(),
+          awsProfile: String(awsProfile).trim(),
+          region: String(region).trim(),
+        });
+
+        outro(picocolors.green(`✔ AWS SSO Profile '${options.profile}' saved successfully!`));
+        console.log(`\nRun ${picocolors.bold(`aws-entra-login sso --profile ${options.profile}`)} to authenticate.\n`);
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Subcommand: sso accounts
+  ssoCmd
+    .command("accounts")
+    .description("List all accessible AWS accounts in SSO Identity Center")
+    .option("-p, --profile <name>", "Configuration profile name", "default")
+    .action(async (options) => {
+      try {
+        const profile = getProfile(options.profile);
+        const startUrl = profile?.ssoStartUrl || process.env.AWS_SSO_START_URL;
+        const region = profile?.ssoRegion || "us-east-1";
+
+        if (!startUrl) {
+          throw new Error("Missing SSO Start URL. Please run 'aws-entra-login sso configure' first.");
+        }
+
+        const accessToken = await getSSOAccessToken(region, startUrl);
+        const accounts = await listSSOAccounts(region, accessToken);
+
+        console.log(`\n${picocolors.bold("Accessible AWS Accounts:")}`);
+        for (const acc of accounts) {
+          console.log(`  • ${picocolors.cyan(picocolors.bold(acc.accountName))} (${acc.accountId}) ${acc.emailAddress ? picocolors.dim(`- ${acc.emailAddress}`) : ""}`);
+        }
+        console.log("");
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Configure Profile Command (Entra ID)
   program
     .command("configure")
     .description("Interactively configure or update an Entra ID profile")
     .option("-p, --profile <name>", "Profile name to configure", "default")
+    .option("--sso", "Configure as AWS SSO profile instead of Entra ID")
     .action(async (options) => {
       try {
+        if (options.sso) {
+          intro(picocolors.bold(picocolors.cyan("Configure AWS IAM Identity Center (SSO) Profile")));
+          const existing = getProfile(options.profile);
+
+          const startUrl = await text({
+            message: "AWS SSO Start URL (e.g. https://my-org.awsapps.com/start):",
+            defaultValue: existing?.ssoStartUrl || "",
+            placeholder: "https://my-org.awsapps.com/start",
+            validate: (v) => (!v.trim() ? "SSO Start URL is required" : undefined),
+          });
+
+          const ssoRegion = await text({
+            message: "AWS SSO Region:",
+            defaultValue: existing?.ssoRegion || "us-east-1",
+          });
+
+          const awsProfile = await text({
+            message: "Destination AWS Profile in ~/.aws/credentials:",
+            defaultValue: existing?.awsProfile || options.profile,
+          });
+
+          saveProfile({
+            name: options.profile,
+            type: "sso",
+            ssoStartUrl: String(startUrl).trim(),
+            ssoRegion: String(ssoRegion).trim(),
+            awsProfile: String(awsProfile).trim(),
+            region: String(ssoRegion).trim(),
+          });
+
+          outro(picocolors.green(`✔ AWS SSO Profile '${options.profile}' saved successfully!`));
+          return;
+        }
+
         intro(picocolors.bold(picocolors.cyan("Configure Microsoft Entra ID Profile")));
 
         const existing = getProfile(options.profile);
@@ -80,6 +241,7 @@ async function main() {
 
         saveProfile({
           name: options.profile,
+          type: "entra",
           tenantId: String(tenantId).trim(),
           appId: String(appId).trim(),
           awsProfile: String(awsProfile).trim(),
@@ -105,15 +267,23 @@ async function main() {
         return;
       }
 
-      console.log(`\n${picocolors.bold("Configured Entra ID Profiles:")}`);
+      console.log(`\n${picocolors.bold("Configured Profiles:")}`);
       for (const p of profiles) {
-        console.log(`  • ${picocolors.cyan(picocolors.bold(p.name))}`);
-        console.log(`    Tenant ID:   ${p.tenantId}`);
-        console.log(`    App ID:      ${p.appId}`);
-        console.log(`    AWS Profile: ${p.awsProfile || p.name}`);
-        if (p.defaultRoleArn) {
-          console.log(`    Default Role: ${p.defaultRoleArn}`);
+        const isSSO = p.type === "sso" || Boolean(p.ssoStartUrl);
+        console.log(`  • ${picocolors.cyan(picocolors.bold(p.name))} ${picocolors.magenta(`[${isSSO ? "AWS SSO" : "Entra ID"}]`)}`);
+        if (isSSO) {
+          console.log(`    Start URL:   ${p.ssoStartUrl}`);
+          console.log(`    SSO Region:  ${p.ssoRegion || "us-east-1"}`);
+          if (p.ssoAccountId) console.log(`    Account ID:  ${p.ssoAccountId}`);
+          if (p.ssoRoleName) console.log(`    Role Name:   ${p.ssoRoleName}`);
+        } else {
+          console.log(`    Tenant ID:   ${p.tenantId}`);
+          console.log(`    App ID:      ${p.appId}`);
+          if (p.defaultRoleArn) {
+            console.log(`    Default Role: ${p.defaultRoleArn}`);
+          }
         }
+        console.log(`    AWS Profile: ${p.awsProfile || p.name}`);
         console.log("");
       }
     });
@@ -123,10 +293,12 @@ async function main() {
     .command("get-credentials")
     .description("Output credentials in AWS credential_process JSON format")
     .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("--sso", "Force AWS SSO flow")
     .action(async (options) => {
       try {
         const creds = await login({
           profile: options.profile,
+          sso: options.sso,
           writeCredentials: false,
           quiet: true,
         });
@@ -144,10 +316,12 @@ async function main() {
     .command("env")
     .description("Output credentials as shell export statements")
     .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("--sso", "Force AWS SSO flow")
     .action(async (options) => {
       try {
         const creds = await login({
           profile: options.profile,
+          sso: options.sso,
           writeCredentials: false,
           quiet: true,
         });
@@ -164,11 +338,13 @@ async function main() {
     .command("exec")
     .description("Execute a command with assumed AWS credentials injected into environment")
     .option("-p, --profile <name>", "Configuration profile name", "default")
+    .option("--sso", "Force AWS SSO flow")
     .argument("<command...>", "Command to execute with AWS credentials")
     .action(async (cmdArgs, options) => {
       try {
         const creds = await login({
           profile: options.profile,
+          sso: options.sso,
           writeCredentials: false,
           quiet: true,
         });
