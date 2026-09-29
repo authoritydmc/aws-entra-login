@@ -1,0 +1,74 @@
+{
+  "name": "aws-entra-login",
+  "version": "1.0.0",
+  "description": "Modern, zero-fragility Microsoft Entra ID (Azure AD) to AWS authentication CLI tool supporting Authenticator number matching, Device Code flow, and AWS credential_process.",
+  "keywords": [
+    "aws",
+    "azure-ad",
+    "microsoft-entra-id",
+    "aws-azure-login",
+    "saml",
+    "sts",
+    "iam-roles",
+    "device-code-flow",
+    "credential-process",
+    "sso",
+    "cli",
+    "developer-tools"
+  ],
+  "author": "authoritydmc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/authoritydmc/aws-entra-login.git"
+  },
+  "bugs": {
+    "url": "https://github.com/authoritydmc/aws-entra-login/issues"
+  },
+  "homepage": "https://github.com/authoritydmc/aws-entra-login#readme",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "aws-entra-login": "./dist/cli.js",
+    "entra-aws": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "tsx --test src/test/aws-entra-login.test.ts",
+    "lint": "eslint src/ --ext .ts",
+    "prepublishOnly": "npm run build && npm test",
+    "release:patch": "npm version patch && git push origin main --follow-tags",
+    "release:minor": "npm version minor && git push origin main --follow-tags",
+    "release:major": "npm version major && git push origin main --follow-tags"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sts": "^3.658.0",
+    "@clack/prompts": "^0.7.0",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.0",
+    "qr-term": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.2.4",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
