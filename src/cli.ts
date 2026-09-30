@@ -7,6 +7,11 @@ import { saveProfile, listProfiles, getProfile } from "./config/profile-store.js
 import { formatCredentialProcessJSON, formatShellEnv } from "./aws/credentials.js";
 import { getSSOAccessToken } from "./auth/sso-flow.js";
 import { listSSOAccounts } from "./aws/sso.js";
+import { getConsoleLoginUrl, openBrowser } from "./aws/console.js";
+import { runDoctor } from "./doctor.js";
+import { showProfileStatus } from "./status.js";
+import { importAwsProfiles } from "./importer.js";
+import { loginAll } from "./batch-login.js";
 import { spawn } from "child_process";
 import picocolors from "picocolors";
 
@@ -18,7 +23,7 @@ async function main() {
     .description(
       "Modern, zero-fragility Microsoft Entra ID (Azure AD) and AWS SSO (IAM Identity Center) authentication CLI tool."
     )
-    .version("1.2.0", "-v, --version", "Output current version");
+    .version("1.3.0", "-v, --version", "Output current version");
 
   // Default Login Command
   program
@@ -85,6 +90,100 @@ async function main() {
           targetRoleArn: options.targetRole,
           writeCredentials: true,
         });
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Console Command (One-Click AWS Web Console Login)
+  program
+    .command("console [profile]")
+    .description("Generate AWS Management Console federation URL and open in browser")
+    .option("-r, --region <region>", "Target AWS Console Region")
+    .option("--destination <url>", "Destination URL in AWS Console")
+    .option("--no-open", "Do not open browser automatically, print URL only")
+    .action(async (profileArg, options) => {
+      try {
+        const profileName = profileArg || "default";
+        const creds = await login({
+          profile: profileName,
+          writeCredentials: false,
+          quiet: true,
+        });
+
+        const targetProfile = getProfile(profileName);
+        const region = options.region || targetProfile?.region || "us-east-1";
+
+        const consoleUrl = await getConsoleLoginUrl(creds, {
+          region,
+          destination: options.destination,
+        });
+
+        console.log(`\n${picocolors.bold("🌐 AWS Management Console URL:")}`);
+        console.log(picocolors.cyan(consoleUrl));
+
+        if (options.open !== false) {
+          console.log(`\n${picocolors.green("✔ Opening AWS Console in default browser...")}\n`);
+          await openBrowser(consoleUrl);
+        } else {
+          console.log("");
+        }
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Status Command
+  program
+    .command("status [profile]")
+    .description("View active session expiration countdown and profile summary")
+    .action((profileArg) => {
+      showProfileStatus(profileArg);
+    });
+
+  // Doctor Command
+  program
+    .command("doctor [profile]")
+    .description("Run comprehensive diagnostics on Entra ID, STS, clocks, and network")
+    .action(async (profileArg) => {
+      await runDoctor(profileArg);
+    });
+
+  // Import AWS SSO profiles Command
+  program
+    .command("import-aws")
+    .alias("import")
+    .description("Auto-discover and import existing SSO profiles from ~/.aws/config")
+    .action(() => {
+      try {
+        const { imported, profiles } = importAwsProfiles();
+        if (imported === 0) {
+          console.log(picocolors.yellow("\nNo new AWS SSO profiles found in ~/.aws/config.\n"));
+          return;
+        }
+
+        console.log(`\n${picocolors.green(picocolors.bold(`✔ Successfully imported ${imported} profile(s) from ~/.aws/config:`))}`);
+        for (const p of profiles) {
+          console.log(`  • ${picocolors.cyan(p.name)} (${p.ssoStartUrl})`);
+        }
+        console.log("");
+      } catch (err: any) {
+        console.error(picocolors.red(`\n✖ Error importing config: ${err.message || err}`));
+        process.exit(1);
+      }
+    });
+
+  // Batch Login Command
+  program
+    .command("login-all")
+    .alias("batch-login")
+    .description("Authenticate all configured profiles into ~/.aws/credentials at once")
+    .option("-f, --force", "Force re-authentication")
+    .action(async (options) => {
+      try {
+        await loginAll({ force: options.force });
       } catch (err: any) {
         console.error(picocolors.red(`\n✖ Error: ${err.message || err}`));
         process.exit(1);

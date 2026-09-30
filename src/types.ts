@@ -23,6 +23,8 @@ export interface EntraProfile {
   awsProfile?: string;  // name in ~/.aws/credentials
 }
 
+export type ProfileConfig = EntraProfile;
+
 export interface DeviceCodeResponse {
   device_code: string;
   user_code: string;
